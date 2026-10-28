@@ -261,6 +261,7 @@ async function teleportTo(cp) {
 }
 
 function snapChaseCamera() {
+  S.camH = S.h; S.vx = S.vz = S.yaw = S.steerCmd = 0;
   const f = fwd(S.h);
   camPos.set(S.x - f.x * 11, S.y + 4.5, S.z - f.z * 11);
   camLook.set(S.x + f.x * 6, S.y + 1.4, S.z + f.z * 6);
@@ -376,45 +377,84 @@ function startDriving() {
 }
 
 // ── update ────────────────────────────────────────────────────
+// Vehicle model: analog steering with speed-sensitive lock, lateral-g limited yaw with
+// inertia, tyre grip (velocity relaxes toward heading; handbrake lets it slide).
+Object.assign(S, { steerCmd: 0, yaw: 0, vx: 0, vz: 0, acc: 0, lat: 0, camH: S.h });
+const bumpNormal = (v, hit, rvx, rvz) => {
+  const vn = v.vx * hit.x + v.vz * hit.z - (rvx * hit.x + rvz * hit.z);
+  if (vn < 0) { v.vx -= vn * hit.x * 1.15; v.vz -= vn * hit.z * 1.15; return -vn; }
+  return 0;
+};
 function driveUpdate(dt, allowInput = true) {
   const up = allowInput && keys.up, dn = allowInput && keys.down;
   const lf = allowInput && keys.left, rt = allowInput && keys.right;
   const brake = allowInput && keys.space, boost = allowInput && keys.shift;
-  const maxV = boost ? 80 : 56;
+  const speed = Math.abs(S.v);
+  const maxV = boost ? 66 : 46;
   const prev = S.v;
   let a = 0;
-  if (up) a += boost ? 44 : 30;
-  if (dn) a -= S.v > 1 ? 58 : 20;
-  if (!up && !dn) a -= Math.sign(S.v) * 7;
-  if (brake) a -= Math.sign(S.v) * 75;
+  if (up) a += (boost ? 34 : 22) * (1 - Math.pow(clamp(S.v / maxV, 0, 1), 1.6)) + 3;
+  if (dn) a -= S.v > 1.5 ? 46 : 12;
+  if (!up && !dn) a -= Math.sign(S.v) * (3.2 + S.v * S.v * 0.0014);
+  if (brake) a -= Math.sign(S.v) * 60;
   S.v += a * dt;
   if (!dn && prev > 0 && S.v < 0) S.v = 0;
   if (!up && prev < 0 && S.v > 0) S.v = 0;
-  if (S.v > maxV) S.v = damp(S.v, maxV, 3, dt);
-  S.v = clamp(S.v, -16, 90);
+  if (S.v > maxV) S.v = damp(S.v, maxV, 2, dt);
+  S.v = clamp(S.v, -11, 80);
+  S.acc = damp(S.acc, (S.v - prev) / Math.max(dt, 1e-3), 6, dt);
 
+  // analog steering: ramps while held, self-centres on release
   const inp = (lf ? 1 : 0) - (rt ? 1 : 0);
-  const maxS = 0.62 / (1 + Math.abs(S.v) * 0.045);
-  S.steer = damp(S.steer, inp * maxS, 7, dt);
-  S.h += (S.v / 3.1) * Math.tan(S.steer) * dt * (brake && Math.abs(S.v) > 12 ? 1.45 : 1);
-
-  const nx = S.x + Math.sin(S.h) * S.v * dt, nz = S.z + Math.cos(S.h) * S.v * dt;
-  if (canDrive(nx, nz)) { S.x = nx; S.z = nz; }
-  else if (canDrive(nx, S.z)) { S.x = nx; S.v *= 0.96; }
-  else if (canDrive(S.x, nz)) { S.z = nz; S.v *= 0.96; }
-  else { S.v *= -0.25; shake = 0.5; }
-
-  const hit = world.colliders.resolve(S, 2.3);
-  if (hit) {
-    const into = -(Math.sin(S.h) * hit.x + Math.cos(S.h) * hit.z) * Math.sign(S.v || 1);
-    S.v *= into > 0.3 ? 0.88 : 0.985;
-    if (into > 0.3 && Math.abs(S.v) > 12) shake = Math.min(1, Math.abs(S.v) / 40);
+  if (inp !== 0) {
+    const rate = inp * S.steerCmd < 0 ? 5 : 1.6;
+    S.steerCmd = clamp(S.steerCmd + inp * rate * dt, -1, 1);
+  } else {
+    const d = 3.0 * dt;
+    S.steerCmd = Math.abs(S.steerCmd) <= d ? 0 : S.steerCmd - Math.sign(S.steerCmd) * d;
   }
-  const tc = world.trafficHit(S);
-  if (tc) {
-    const dx = (S.x - tc.x) / 2.3, dz = (S.z - tc.z) / 4.4;
-    if (Math.abs(dx) > Math.abs(dz)) S.x += Math.sign(dx) * 0.4; else S.z += Math.sign(dz) * 0.4;
-    S.v *= 0.92; shake = Math.max(shake, 0.35);
+  const maxS = 0.5 / (1 + speed * 0.07);
+  S.steer = damp(S.steer, S.steerCmd * maxS, 12, dt);
+  const sliding = brake && speed > 10;
+  let yawT = (S.v / 3.0) * Math.tan(S.steer) * (sliding ? 1.35 : 1);
+  const lim = (sliding ? 13 : 8.5) / Math.max(speed, 4);
+  yawT = clamp(yawT, -lim, lim);
+  S.yaw = damp(S.yaw, yawT, sliding ? 4 : 9, dt);
+  S.h += S.yaw * dt;
+  S.lat = S.yaw * S.v;
+
+  // grip: velocity follows heading
+  const f = fwd(S.h);
+  const grip = sliding ? 2.2 : 10;
+  S.vx = damp(S.vx, f.x * S.v, grip, dt);
+  S.vz = damp(S.vz, f.z * S.v, grip, dt);
+
+  const nx = S.x + S.vx * dt, nz = S.z + S.vz * dt;
+  if (canDrive(nx, nz)) { S.x = nx; S.z = nz; }
+  else if (canDrive(nx, S.z)) { S.x = nx; S.vz *= 0.5; }
+  else if (canDrive(S.x, nz)) { S.z = nz; S.vx *= 0.5; }
+  else { S.vx *= -0.2; S.vz *= -0.2; S.v *= 0.3; shake = 0.5; }
+
+  // solid obstacles: two probe circles (nose + tail) against statics and traffic
+  let impact = 0;
+  for (const off of [1.7, -1.7]) {
+    for (let it = 0; it < 2; it++) {
+      const p = { x: S.x + f.x * off, z: S.z + f.z * off };
+      const ox = p.x, oz = p.z;
+      const hit = world.colliders.resolve(p, 1.15);
+      let tr = null;
+      if (!hit) tr = world.trafficResolve(p, 1.15);
+      const h = hit || tr;
+      if (!h) break;
+      S.x += p.x - ox; S.z += p.z - oz;
+      const rvz = tr ? tr.car.dir * tr.car.v : 0;
+      impact = Math.max(impact, bumpNormal(S, h, 0, rvz));
+    }
+  }
+  if (impact > 0) {
+    S.v = S.vx * f.x + S.vz * f.z;
+    S.yaw *= 0.6;
+    if (impact > 3) shake = Math.max(shake, clamp(impact / 22, 0.2, 1));
   }
   poseCar(dt);
 }
@@ -423,22 +463,24 @@ function poseCar(dt) {
   const f = fwd(S.h);
   const yf = surfaceH(S.x + f.x * 2.2, S.z + f.z * 2.2), yb = surfaceH(S.x - f.x * 2.2, S.z - f.z * 2.2);
   S.y = damp(S.y, (yf + yb) / 2, 14, dt);
-  S.pitch = damp(S.pitch, Math.atan2(yf - yb, 4.4), 10, dt);
-  S.roll = damp(S.roll, S.steer * Math.abs(S.v) * 0.0028, 6, dt);
+  S.pitch = damp(S.pitch, Math.atan2(yf - yb, 4.4) + S.acc * 0.0032, 8, dt);
+  S.roll = damp(S.roll, S.lat * 0.0042, 6, dt);
   car.group.position.set(S.x, S.y, S.z);
   car.group.rotation.set(-S.pitch, S.h, S.roll, 'YXZ');
-  car.setWheels(S.steer, (S.v * dt) / 0.38);
+  car.setWheels(S.steer * 1.2, (S.v * dt) / 0.38);
+  if (person.group.parent === car.group) person.drive({ steer: S.steerCmd, lat: S.lat, acc: S.acc, speed: S.v, t: tAbs, dt });
 }
 
 function cameraDriving(dt, t) {
   if (!dragging && performance.now() - lastDrag > 1400) camYaw = damp(camYaw, 0, 2.2, dt);
   const sp = Math.abs(S.v);
   const dist = 10.5 + sp * 0.085, height = 4.1 + sp * 0.02;
-  const ang = S.h + Math.PI + camYaw;
+  S.camH += angDiff(S.camH, S.h) * (1 - Math.exp(-3.0 * dt));
+  const ang = S.camH + Math.PI + camYaw;
   const want = new V3(S.x + Math.sin(ang) * dist, S.y + height, S.z + Math.cos(ang) * dist);
   const k = state === 'driving' ? 6 : 4;
   camPos.x = damp(camPos.x, want.x, k, dt); camPos.y = damp(camPos.y, want.y, k, dt); camPos.z = damp(camPos.z, want.z, k, dt);
-  const f = fwd(S.h);
+  const f = fwd(S.camH);
   const look = new V3(S.x + f.x * (6 + sp * 0.1), S.y + 1.4, S.z + f.z * (6 + sp * 0.1));
   camLook.x = damp(camLook.x, look.x, 9, dt); camLook.y = damp(camLook.y, look.y, 9, dt); camLook.z = damp(camLook.z, look.z, 9, dt);
   const ground = surfaceH(camPos.x, camPos.z) + 1.4;
@@ -514,7 +556,8 @@ function infoUpdate(dt, t) {
   exit.t += dt; infoT += dt;
   const wave = smoothstep(0.2, 0.7, infoT) * (1 - smoothstep(2.6, 3.3, infoT));
   walkPhase += dt * 6;
-  person.pose({ seat: 0, walk: 0, phase: walkPhase, wave });
+  const point = smoothstep(3.4, 4.0, infoT) * (1 - smoothstep(7.5, 8.3, infoT));
+  person.pose({ seat: 0, walk: 0, phase: walkPhase, wave, point });
   const faceCam = Math.atan2(-exit.fd.x, -exit.fd.z);
   const yawFace = Math.atan2(exit.fd.x, exit.fd.z);
   personYaw = yawFace + angDiff(yawFace, faceCam) * wave * 0.6;

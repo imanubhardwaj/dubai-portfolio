@@ -223,6 +223,8 @@ export function createWorld(scene, renderer) {
   const glassTex = makeWindowTextures('glass');
   const ribbonTex = makeWindowTextures('ribbon');
   const stoneTex = makeWindowTextures('stone');
+  const towerTex = makeWindowTextures('tower');
+  const goldTex = makeWindowTextures('gold');
   // grounds the base of buildings in shadow and adds a soft height haze
   const baseShade = (mat) => {
     mat.onBeforeCompile = (sh) => {
@@ -242,6 +244,11 @@ export function createWorld(scene, renderer) {
   const mats = {
     glass: mkGlass(glassTex, 0.1, 0.55),
     ribbon: mkGlass(ribbonTex, 0.14, 0.45),
+    tower: mkGlass(towerTex, 0.12, 0.65),
+    goldglass: baseShade(new THREE.MeshStandardMaterial({
+      map: goldTex.map, emissiveMap: goldTex.lit, emissive: 0xffc060, emissiveIntensity: 0,
+      vertexColors: true, roughness: 0.2, metalness: 0.9, envMapIntensity: 1.8,
+    })),
     stone: baseShade(new THREE.MeshStandardMaterial({
       map: stoneTex.map, emissiveMap: stoneTex.lit, emissive: 0xffd9a0, emissiveIntensity: 0,
       vertexColors: true, roughness: 0.85, metalness: 0.0,
@@ -253,8 +260,8 @@ export function createWorld(scene, renderer) {
     plate: new THREE.MeshStandardMaterial({ color: 0xc4a874, roughness: 1, vertexColors: true }),
     halo: new THREE.MeshBasicMaterial({ color: 0x5fe0d6, vertexColors: true }),
   };
-  const reflective = [mats.glass, mats.ribbon, mats.gold, mats.silver];
-  const windowMats = [mats.glass, mats.ribbon, mats.stone];
+  const reflective = [mats.glass, mats.ribbon, mats.tower, mats.goldglass, mats.gold, mats.silver];
+  const windowMats = [mats.glass, mats.ribbon, mats.tower, mats.goldglass, mats.stone];
 
   // sky ----------------------------------------------------------
   const skyUniforms = {
@@ -478,7 +485,7 @@ export function createWorld(scene, renderer) {
     zi.receiveShadow = true; root.add(zi);
     const poleG = new THREE.CylinderGeometry(0.12, 0.15, 6.5, 6); poleG.translate(0, 3.25, 0);
     const pi = new THREE.InstancedMesh(poleG, new THREE.MeshStandardMaterial({ color: 0x4b5057, metalness: 0.6, roughness: 0.5 }), poles.length);
-    poles.forEach((p, i) => { d.position.set(p[0], 0, p[1]); d.scale.set(1, 1, 1); d.rotation.set(0, p[2], 0); d.updateMatrix(); pi.setMatrixAt(i, d.matrix); });
+    poles.forEach((p, i) => { colliders.addCircle(p[0], p[1], 0.3); d.position.set(p[0], 0, p[1]); d.scale.set(1, 1, 1); d.rotation.set(0, p[2], 0); d.updateMatrix(); pi.setMatrixAt(i, d.matrix); });
     pi.castShadow = true; root.add(pi);
     const head = (lit) => {
       const parts = [];
@@ -590,7 +597,7 @@ export function createWorld(scene, renderer) {
 
   // city ---------------------------------------------------------
   const B = new Builder(rng);
-  const ctx = { B, mats, colliders, scene: root, updaters };
+  const ctx = { B, mats, colliders, scene: root, updaters, envMats: ctx2.envMats };
 
   // landmarks
   const LM = {};
@@ -768,6 +775,7 @@ export function createWorld(scene, renderer) {
       d.rotation.set(0, Math.atan2(-l[2], -l[3]), 0);
       d.updateMatrix();
       poles.setMatrixAt(i, d.matrix); heads.setMatrixAt(i, d.matrix);
+      colliders.addCircle(l[0], l[1], 0.38);
     });
     poles.castShadow = true;
     root.add(poles, heads);
@@ -823,6 +831,7 @@ export function createWorld(scene, renderer) {
       d.scale.set(s, s * (0.9 + rng() * 0.35), s);
       d.updateMatrix();
       palms.setMatrixAt(i, d.matrix);
+      colliders.addCircle(p[0], p[1], 0.6 * s);
     });
     palms.castShadow = true;
     root.add(palms);
@@ -1022,11 +1031,15 @@ export function createWorld(scene, renderer) {
       sky.position.copy(focus);
     },
     skyFollow(p) { sky.position.copy(p); },
-    // bump player out of traffic; returns true on contact
-    trafficHit(p) {
+    // push a probe circle out of ambient traffic (cars are axis-aligned boxes)
+    trafficResolve(p, r) {
       for (const c of traffic) {
-        if (Math.abs(p.x - c.x) < 2.3 && Math.abs(p.z - c.z) < 4.4) {
-          return c;
+        if (Math.abs(p.z - c.z) > 7) continue;
+        const dx = p.x - c.x, dz = p.z - c.z, ex = 1.0 + r, ez = 2.45 + r;
+        if (Math.abs(dx) < ex && Math.abs(dz) < ez) {
+          const px = ex - Math.abs(dx), pz = ez - Math.abs(dz);
+          if (px < pz) { p.x += Math.sign(dx || 1) * px; return { x: Math.sign(dx || 1), z: 0, car: c }; }
+          p.z += Math.sign(dz || 1) * pz; return { x: 0, z: Math.sign(dz || 1), car: c };
         }
       }
       return null;

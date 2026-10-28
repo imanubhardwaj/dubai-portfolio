@@ -6,40 +6,64 @@ const TEAL = [0.45, 0.72, 0.78];
 const SAND = [0.93, 0.82, 0.66];
 const PINK = [0.95, 0.74, 0.6];
 
-// ── Burj Khalifa — Y-shaped, spiral setbacks, 828 m ───────────
+// ── Burj Khalifa — Y-plan, rounded wing tips, spiral setbacks, 828 m ───
 export function buildBurjKhalifa(ctx, x, z) {
   const { B } = ctx;
-  const wingTop = [560, 470, 385];
+  const TH = 24;                       // tier height
+  const wingTop = [640, 560, 480];     // each wing steps down in turn → the spiral
+  const T = [0.9, 0.95, 1.0];
   for (let k = 0; k < 3; k++) {
     const a = (k * Math.PI * 2) / 3 + 0.5;
-    for (let s = 0; s * 46 < wingTop[k]; s++) {
-      const ext = 40 - s * 2.9, w = 18 - s * 1.1;
-      if (ext < 7) break;
-      B.box('glass', ext, 46, w, x + Math.cos(a) * ext / 2, s * 46, z + Math.sin(a) * ext / 2, { ry: -a, color: SILVER });
+    const ca = Math.cos(a), sa = Math.sin(a);
+    for (let s = 0; s * TH < wingTop[k]; s++) {
+      const ext = 46 - s * 1.55, w = 20 - s * 0.58;
+      if (ext < 8 || w < 3) break;
+      const half = ext - w / 2;                    // box runs to the centre of the rounded tip
+      B.box('tower', half, TH, w, x + ca * half / 2, s * TH, z + sa * half / 2, { ry: -a, color: [T[k], T[k], T[k]] });
+      B.cyl('tower', w / 2, w / 2, TH, 14, x + ca * half, s * TH, z + sa * half, { color: [T[k], T[k], T[k]] });
     }
   }
-  B.cyl('glass', 11, 13, 650, 14, x, 0, z, { color: SILVER });
-  B.cyl('silver', 0.5, 6, 180, 10, x, 648, z, { tile: false });
-  B.cyl('stone', 52, 58, 10, 28, x, 0, z, { color: [0.85, 0.8, 0.72] });
+  // hexagonal core, then the stepped mast and spire
+  B.cyl('tower', 13, 14, 640, 6, x, 0, z);
+  B.cyl('tower', 9, 12.5, 70, 12, x, 640, z);
+  B.cyl('silver', 5.5, 8.5, 60, 12, x, 710, z, { tile: false });
+  B.cyl('silver', 2.8, 5, 50, 10, x, 770, z, { tile: false });
+  B.cyl('silver', 0.4, 2.8, 8, 8, x, 820, z, { tile: false });
+  // mechanical-floor bands
+  for (const h of [120, 240, 360, 480, 600]) B.cyl('silver', 14.5, 14.5, 3, 6, x, h, z, { tile: false });
+  // podium / hotel base
+  B.cyl('stone', 54, 58, 9, 32, x, 0, z, { color: [0.85, 0.8, 0.72] });
+  B.cyl('glass', 38, 40, 28, 28, x, 9, z);
   ctx.colliders.addCircle(x, z, 46);
 
-  const blink = new THREE.Mesh(
-    new THREE.SphereGeometry(1.6, 10, 8),
-    new THREE.MeshBasicMaterial({ color: 0xff2030 })
-  );
+  const blink = new THREE.Mesh(new THREE.SphereGeometry(1.6, 10, 8), new THREE.MeshBasicMaterial({ color: 0xff2030 }));
   blink.position.set(x, 830, z);
   ctx.scene.add(blink);
   ctx.updaters.push((t) => { blink.visible = Math.sin(t * 3.2) > -0.2; });
 
-  // reflecting pool in front (south) — Dubai Fountain lake
+  // Dubai Fountain lake with animated jets
   const lake = new THREE.Mesh(
     new THREE.PlaneGeometry(300, 130),
-    new THREE.MeshStandardMaterial({ color: 0x1b6f93, roughness: 0.08, metalness: 0.4 })
+    new THREE.MeshStandardMaterial({ color: 0x15607f, roughness: 0.06, metalness: 0.5 })
   );
   lake.rotation.x = -Math.PI / 2;
   lake.position.set(x, 0.03, z + 190);
   lake.receiveShadow = true;
   ctx.scene.add(lake);
+  const jetMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.55, depthWrite: false });
+  const jets = [];
+  for (let i = 0; i < 38; i++) {
+    const j = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.7, 1, 8, 1, true), jetMat);
+    j.position.set(x - 126 + i * 6.8, 0, z + 190 + Math.sin(i * 0.7) * 18);
+    ctx.scene.add(j); jets.push(j);
+  }
+  ctx.updaters.push((t, night) => {
+    jets.forEach((j, i) => {
+      const h = 3 + (0.5 + 0.5 * Math.sin(t * 1.7 + i * 0.55)) * (12 + 18 * (0.5 + 0.5 * Math.sin(t * 0.4 + i)));
+      j.scale.y = h; j.position.y = h / 2;
+    });
+    jetMat.color.setRGB(1, 1, 1).lerp(new THREE.Color(0.7, 0.9, 1.6), night);
+  });
 }
 
 // ── Burj Al Arab — billowing sail on its own island ───────────
@@ -116,18 +140,21 @@ export function buildBurjAlArab(ctx, x, z) {
   });
 }
 
-// ── Dubai Frame — 150 m golden picture frame ──────────────────
+// ── Dubai Frame — 150 m gold-glass picture frame ─────────────
 export function buildDubaiFrame(ctx, x, z) {
   const { B } = ctx;
-  B.box('gold', 8, 150, 26, x - 45, 0, z, { tile: false });
-  B.box('gold', 8, 150, 26, x + 45, 0, z, { tile: false });
-  B.box('gold', 98, 11, 28, x, 139, z, { tile: false });
-  B.box('gold', 98, 3, 30, x, 136, z, { tile: false, color: [0.7, 0.7, 0.7] });
-  // base planters
-  B.box('stone', 22, 2, 36, x - 45, 0, z, { tile: false });
-  B.box('stone', 22, 2, 36, x + 45, 0, z, { tile: false });
-  ctx.colliders.addBox(x - 51, z - 15, x - 39, z + 15);
-  ctx.colliders.addBox(x + 39, z - 15, x + 51, z + 15);
+  const G = [1, 0.95, 0.85];
+  B.box('goldglass', 9, 150, 28, x - 45, 0, z, { color: G });
+  B.box('goldglass', 9, 150, 28, x + 45, 0, z, { color: G });
+  B.box('goldglass', 99, 12, 30, x, 138, z, { color: G });
+  B.box('silver', 99, 1.2, 31, x, 150, z, { tile: false });                 // cap
+  B.box('silver', 99, 1.4, 31, x, 137, z, { tile: false });                 // sky-deck underside
+  B.box('silver', 1.2, 150, 29, x - 40.2, 0, z, { tile: false });           // inner edge trims
+  B.box('silver', 1.2, 150, 29, x + 40.2, 0, z, { tile: false });
+  B.box('stone', 24, 2, 38, x - 45, 0, z, { tile: false, color: [0.85, 0.8, 0.7] });
+  B.box('stone', 24, 2, 38, x + 45, 0, z, { tile: false, color: [0.85, 0.8, 0.7] });
+  ctx.colliders.addBox(x - 52, z - 16, x - 38, z + 16);
+  ctx.colliders.addBox(x + 38, z - 16, x + 52, z + 16);
 }
 
 // ── Museum of the Future — elliptical steel ring on a mound ───
@@ -142,26 +169,44 @@ export function buildMuseum(ctx, x, z) {
   });
   geo.translate(0, 0, -26);
   const p = geo.attributes.position, uv = geo.attributes.uv;
-  for (let i = 0; i < p.count; i++) uv.setXY(i, (p.getX(i) + 48) / 96, (p.getY(i) + 66) / 132);
+  for (let i = 0; i < p.count; i++) { // polar mapping: lines run around the ring
+    const ex = p.getX(i) / 44, ey = p.getY(i) / 62;
+    uv.setXY(i, (Math.atan2(ey, ex) / (Math.PI * 2) + 0.5) * 3, Math.min(1, Math.hypot(ex, ey)) * 1.0);
+  }
 
-  // glowing calligraphy-style strokes
-  const R = mulberry32(77);
-  const emi = makeLabelTexture((g, w, h) => {
-    g.fillStyle = '#000'; g.fillRect(0, 0, w, h);
-    g.strokeStyle = '#fff'; g.lineCap = 'round';
-    for (let i = 0; i < 26; i++) {
-      g.lineWidth = 4 + R() * 9;
-      const y0 = R() * h, x0 = R() * w * 0.4;
-      g.beginPath();
-      g.moveTo(x0, y0);
-      g.bezierCurveTo(x0 + w * 0.3, y0 + (R() - 0.5) * 120, x0 + w * 0.5, y0 + (R() - 0.5) * 160, x0 + w * (0.5 + R() * 0.5), y0 + (R() - 0.5) * 80);
-      g.stroke();
+  // calligraphy: dark cut-outs in white steel that glow at night
+  const strokes = (g, w, h, col, bg) => {
+    const R = mulberry32(77);
+    if (bg) { g.fillStyle = bg; g.fillRect(0, 0, w, h); }
+    g.strokeStyle = col; g.lineCap = 'round'; g.lineJoin = 'round';
+    const rows = 26;
+    for (let r = 0; r < rows; r++) {
+      const y = ((r + 0.5) / rows) * h;
+      let x = -10;
+      while (x < w + 10) {
+        const run = 30 + R() * 130;
+        g.lineWidth = 4 + R() * 6;
+        g.beginPath(); g.moveTo(x, y);
+        const k = 3 + Math.floor(R() * 3);
+        for (let i = 1; i <= k; i++) {
+          const nx = x + (run * i) / k, amp = 5 + R() * 9;
+          g.quadraticCurveTo(x + (run * (i - 0.5)) / k, y + (R() < 0.5 ? -amp : amp), nx, y + (R() - 0.5) * 4);
+        }
+        g.stroke();
+        if (R() < 0.35) { g.beginPath(); g.arc(x + run * 0.5, y - 14, 2.5, 0, 7); g.fillStyle = col; g.fill(); }
+        x += run + 14 + R() * 26;
+      }
     }
-  }, 512, 512);
+  };
+  const emi = makeLabelTexture((g, w, h) => strokes(g, w, h, '#fff', '#000'), 1024, 1024);
+  const albedo = makeLabelTexture((g, w, h) => strokes(g, w, h, '#1c2026', '#e9edf0'), 1024, 1024);
+  albedo.wrapS = THREE.RepeatWrapping;
   const mat = new THREE.MeshStandardMaterial({
-    color: 0xcfd6dc, roughness: 0.22, metalness: 0.95,
-    emissive: 0x9fffe8, emissiveMap: emi, emissiveIntensity: 0.0,
+    map: albedo, color: 0xffffff, roughness: 0.32, metalness: 0.45, envMapIntensity: 1.2,
+    emissive: 0xa8ffe6, emissiveMap: emi, emissiveIntensity: 0.0,
   });
+  emi.wrapS = THREE.RepeatWrapping;
+  ctx.envMats.push(mat);
   const ring = new THREE.Mesh(geo, mat);
   ring.position.set(x, 78, z);
   ring.castShadow = ring.receiveShadow = true;

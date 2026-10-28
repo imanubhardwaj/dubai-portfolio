@@ -73,6 +73,30 @@ export function makeWindowTextures(kind) {
       for (let c = 0; c < cols; c++) m.fillRect(c * S, y + 8, 1.5, S - 8);
       for (let c = 0; c < cols; c++) if (R() < 0.3) lit(c * S + 1, y + 9, S - 2, S - 10);
     }
+  } else if (kind === 'tower') { // silver fins, narrow blue panes, spandrel bands (Burj-style cladding)
+    m.fillStyle = '#cdd6df';
+    m.fillRect(0, 0, mapC.width, mapC.height);
+    for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+      const x = c * S, y = r * S;
+      const g = m.createLinearGradient(x, y, x, y + S);
+      g.addColorStop(0, '#6f9bbd'); g.addColorStop(1, '#3a6183');
+      m.fillStyle = g;
+      m.fillRect(x + 8, y + 3, S - 16, S - 6);
+      if (r % 4 === 3) { m.fillStyle = '#f0f4f8'; m.fillRect(x, y + S - 5, S, 5); }
+      if (R() < 0.3) lit(x + 8, y + 3, S - 16, S - 6);
+    }
+  } else if (kind === 'gold') { // bronze-gold glass with dark vertical window strips
+    m.fillStyle = '#d4a845';
+    m.fillRect(0, 0, mapC.width, mapC.height);
+    for (let c = 0; c < cols; c++) {
+      const g = m.createLinearGradient(0, 0, 0, mapC.height);
+      g.addColorStop(0, '#5a4216'); g.addColorStop(0.5, '#3a2a0c'); g.addColorStop(1, '#5a4216');
+      m.fillStyle = g;
+      m.fillRect(c * S + 9, 0, 14, mapC.height);
+      m.fillStyle = 'rgba(255,235,170,0.22)';
+      for (let r = 0; r < rows; r++) m.fillRect(c * S, r * S, S, 1.5);
+    }
+    for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) if (R() < 0.35) lit(c * S + 9, r * S + 2, 14, S - 4);
   } else { // residential stone with recessed windows and balcony lines
     m.fillStyle = '#e1cfaf';
     m.fillRect(0, 0, mapC.width, mapC.height);
