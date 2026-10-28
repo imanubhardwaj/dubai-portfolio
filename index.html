@@ -135,6 +135,9 @@
     #speedo { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 10; padding: 10px 26px; border-radius: 999px; display: flex; align-items: baseline; gap: 8px; font-family: var(--display); transition: opacity .4s, transform .4s; }
     #speedo b { font-size: 34px; font-weight: 600; min-width: 62px; text-align: right; font-variant-numeric: tabular-nums; }
     #speedo span { font-size: 11px; letter-spacing: .2em; color: var(--mute); }
+    #gear { font-style: normal; font-weight: 700; font-size: 14px; letter-spacing: .08em; padding: 3px 9px; border-radius: 8px; background: rgba(255,255,255,.12); margin-right: 6px; align-self: center; }
+    #gear.shift { animation: gearpop .45s ease; }
+    @keyframes gearpop { 0% { transform: scale(1.5); background: var(--gold); color: #1b1305; } 100% { transform: none; } }
     #hint { position: fixed; left: 50%; bottom: 86px; transform: translateX(-50%); z-index: 10; font-size: 12.5px; color: var(--mute); display: flex; gap: 20px; padding: 9px 18px; border-radius: 999px; transition: opacity .6s; white-space: nowrap; }
     #hint.hide { opacity: 0; pointer-events: none; }
     #park { position: fixed; left: 50%; top: 40%; transform: translate(-50%, -50%) scale(.9); z-index: 11; font-family: var(--display); font-size: 15px; letter-spacing: .2em; text-transform: uppercase; padding: 12px 22px; border-radius: 999px; opacity: 0; transition: opacity .3s, transform .3s; pointer-events: none; }
@@ -206,8 +209,8 @@
   </section>
 
   <div id="minimap" class="glass"><canvas id="mm" width="380" height="410"></canvas></div>
-  <div id="speedo" class="glass"><b id="kmh">0</b><span>KM/H</span></div>
-  <div id="hint" class="glass"><span><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> drive</span><span><kbd>Shift</kbd> boost</span><span><kbd>Space</kbd> brake</span><span><kbd>1</kbd>–<kbd>6</kbd> teleport</span><span><kbd>N</kbd> time of day</span></div>
+  <div id="speedo" class="glass"><i id="gear">G3</i><b id="kmh">0</b><span>KM/H</span></div>
+  <div id="hint" class="glass"><span><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> drive</span><span><kbd>Shift</kbd> boost</span><span><kbd>W</kbd><kbd>W</kbd> / <kbd>S</kbd><kbd>S</kbd> gear</span><span><kbd>Space</kbd> brake</span><span><kbd>1</kbd>–<kbd>6</kbd> teleport</span><span><kbd>N</kbd> time of day</span></div>
   <div id="park" class="glass">Slow down to park</div>
 
   <div id="touch">

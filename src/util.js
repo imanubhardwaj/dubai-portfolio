@@ -149,6 +149,41 @@ export function makeGroundTexture(base, vary, seed = 3, size = 256, streaks = fa
   return t;
 }
 
+const _roadCache = new Map();
+export function roadTexture(lanes, oneway) {
+  lanes = Math.max(1, Math.min(8, lanes));
+  const key = `${lanes}${oneway ? 'o' : 't'}`;
+  if (_roadCache.has(key)) return _roadCache.get(key);
+  const LW = 112, W = lanes * LW, H = 512;
+  const c = document.createElement('canvas');
+  c.width = W; c.height = H;
+  const g = c.getContext('2d');
+  g.fillStyle = '#4b4d53'; g.fillRect(0, 0, W, H);
+  const R = mulberry32(lanes * 7 + (oneway ? 1 : 2));
+  for (let i = 0; i < 9000; i++) { const v = 62 + Math.floor(R() * 28); g.fillStyle = `rgb(${v},${v + 1},${v + 3})`; g.fillRect(R() * W, R() * H, 2, 2); }
+  for (let l = 0; l < lanes; l++) { // tyre-wear darkening in each lane
+    for (const o of [0.3, 0.7]) { g.fillStyle = 'rgba(0,0,0,0.12)'; g.fillRect(l * LW + LW * o - 9, 0, 18, H); }
+  }
+  const line = (x, w, col, dash) => {
+    g.fillStyle = col;
+    if (!dash) { g.fillRect(x - w / 2, 0, w, H); return; }
+    for (let y = 0; y < H; y += 256) g.fillRect(x - w / 2, y, w, 128);
+  };
+  line(7, 8, '#ececec'); line(W - 7, 8, '#ececec');
+  if (oneway) { for (let l = 1; l < lanes; l++) line(l * LW, 6, '#ececec', true); }
+  else if (lanes === 2) line(W / 2, 6, '#ececec', true);
+  else {
+    line(W / 2 - 6, 5, '#f2c230'); line(W / 2 + 6, 5, '#f2c230');
+    for (let l = 1; l < lanes / 2; l++) { line(l * LW, 6, '#ececec', true); line(W - l * LW, 6, '#ececec', true); }
+  }
+  const t = new THREE.CanvasTexture(c);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.anisotropy = 8;
+  _roadCache.set(key, t);
+  return t;
+}
+
 export function makeRoadTexture(kind) {
   const W = kind === 'r2' ? 256 : kind === 'r4' ? 512 : 1024;
   const H = 512;
@@ -294,10 +329,18 @@ export class Colliders {
       }
   }
   addBox(x0, z0, x1, z1) { this._insert({ t: 0, x0, z0, x1, z1 }, x0, z0, x1, z1); }
-  addCircle(x, z, r) { this._insert({ t: 1, x, z, r }, x - r, z - r, x + r, z + r); }
+  addCircle(x, z, r, yc) { this._insert({ t: 1, x, z, r, yc }, x - r, z - r, x + r, z + r); }
+  // oriented box: centre, half extents, rotation of local x axis (radians in the xz plane)
+  addOBB(cx, cz, hx, hz, ang, yc) {
+    const c = Math.cos(ang), s = Math.sin(ang);
+    const ex = Math.abs(c) * hx + Math.abs(s) * hz, ez = Math.abs(s) * hx + Math.abs(c) * hz;
+    this._insert({ t: 2, cx, cz, hx, hz, c, s, yc }, cx - ex, cz - ez, cx + ex, cz + ez);
+  }
+  test(x, z, r) { const p = { x, z }; return !!this.resolve(p, r); }
 
   // pushes p {x,z} out of any collider; returns penetration normal or null
-  resolve(p, r) {
+  // y = height of the mover: elevated colliders (yc set) only apply on their own level
+  resolve(p, r, y) {
     const s = this.cell;
     let hit = null;
     const i0 = Math.floor((p.x - r) / s), i1 = Math.floor((p.x + r) / s);
@@ -307,7 +350,24 @@ export class Colliders {
         const a = this.g.get(this._k(i, j));
         if (!a) continue;
         for (const c of a) {
+          if (y !== undefined && (c.yc === undefined ? y > 4 : Math.abs(y - c.yc) > 4)) continue;
           let dx, dz, d, rr;
+          if (c.t === 2) {
+            const ox = p.x - c.cx, oz = p.z - c.cz;
+            const lx = ox * c.c + oz * c.s, lz = -ox * c.s + oz * c.c;
+            const qx = clamp(lx, -c.hx, c.hx), qz = clamp(lz, -c.hz, c.hz);
+            const ddx = lx - qx, ddz = lz - qz, dd = Math.hypot(ddx, ddz);
+            if (dd >= r) continue;
+            let nlx, nlz, push;
+            if (dd < 1e-5) {
+              const ax = c.hx - Math.abs(lx), az = c.hz - Math.abs(lz);
+              if (ax < az) { nlx = lx < 0 ? -1 : 1; nlz = 0; push = ax + r; } else { nlx = 0; nlz = lz < 0 ? -1 : 1; push = az + r; }
+            } else { nlx = ddx / dd; nlz = ddz / dd; push = r - dd; }
+            const wx = nlx * c.c - nlz * c.s, wz = nlx * c.s + nlz * c.c;
+            p.x += wx * push; p.z += wz * push;
+            hit = { x: wx, z: wz };
+            continue;
+          }
           if (c.t === 0) {
             const cx = clamp(p.x, c.x0, c.x1), cz = clamp(p.z, c.z0, c.z1);
             dx = p.x - cx; dz = p.z - cz; d = Math.hypot(dx, dz); rr = r;

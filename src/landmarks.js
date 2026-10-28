@@ -67,10 +67,10 @@ export function buildBurjKhalifa(ctx, x, z) {
 }
 
 // ── Burj Al Arab — billowing sail on its own island ───────────
-export function buildBurjAlArab(ctx, x, z) {
+export function buildBurjAlArab(ctx, x, z, face = 0) {
   const g = new THREE.Group();
   g.position.set(x, 0, z);
-  g.rotation.y = -Math.PI / 2 + 0.45; // sail faces the causeway, turned ~25° for a 3/4 view
+  g.rotation.y = face + Math.PI + 0.45; // sail faces the road, turned ~25° for a 3/4 view
   const H = 321;
 
   // sail
@@ -141,24 +141,26 @@ export function buildBurjAlArab(ctx, x, z) {
 }
 
 // ── Dubai Frame — 150 m gold-glass picture frame ─────────────
-export function buildDubaiFrame(ctx, x, z) {
+export function buildDubaiFrame(ctx, x, z, face = 0) {
   const { B } = ctx;
+  const c = Math.cos(face), s = Math.sin(face);
+  const P = (lx, lz) => [x + lx * c + lz * s, z - lx * s + lz * c];
+  const part = (key, w, h, d, lx, y, lz, o = {}) => { const [px, pz] = P(lx, lz); B.box(key, w, h, d, px, y, pz, { ry: face, ...o }); };
   const G = [1, 0.95, 0.85];
-  B.box('goldglass', 9, 150, 28, x - 45, 0, z, { color: G });
-  B.box('goldglass', 9, 150, 28, x + 45, 0, z, { color: G });
-  B.box('goldglass', 99, 12, 30, x, 138, z, { color: G });
-  B.box('silver', 99, 1.2, 31, x, 150, z, { tile: false });                 // cap
-  B.box('silver', 99, 1.4, 31, x, 137, z, { tile: false });                 // sky-deck underside
-  B.box('silver', 1.2, 150, 29, x - 40.2, 0, z, { tile: false });           // inner edge trims
-  B.box('silver', 1.2, 150, 29, x + 40.2, 0, z, { tile: false });
-  B.box('stone', 24, 2, 38, x - 45, 0, z, { tile: false, color: [0.85, 0.8, 0.7] });
-  B.box('stone', 24, 2, 38, x + 45, 0, z, { tile: false, color: [0.85, 0.8, 0.7] });
-  ctx.colliders.addBox(x - 52, z - 16, x - 38, z + 16);
-  ctx.colliders.addBox(x + 38, z - 16, x + 52, z + 16);
+  part('goldglass', 9, 150, 28, -45, 0, 0, { color: G });
+  part('goldglass', 9, 150, 28, 45, 0, 0, { color: G });
+  part('goldglass', 99, 12, 30, 0, 138, 0, { color: G });
+  part('silver', 99, 1.2, 31, 0, 150, 0, { tile: false });
+  part('silver', 99, 1.4, 31, 0, 137, 0, { tile: false });
+  part('silver', 1.2, 150, 29, -40.2, 0, 0, { tile: false });
+  part('silver', 1.2, 150, 29, 40.2, 0, 0, { tile: false });
+  part('stone', 24, 2, 38, -45, 0, 0, { tile: false, color: [0.85, 0.8, 0.7] });
+  part('stone', 24, 2, 38, 45, 0, 0, { tile: false, color: [0.85, 0.8, 0.7] });
+  for (const sx of [-45, 45]) { const [px, pz] = P(sx, 0); ctx.colliders.addOBB(px, pz, 7, 16, -face); }
 }
 
 // ── Museum of the Future — elliptical steel ring on a mound ───
-export function buildMuseum(ctx, x, z) {
+export function buildMuseum(ctx, x, z, face = 0) {
   const outer = new THREE.Shape();
   outer.absellipse(0, 0, 44, 62, 0, Math.PI * 2, false, 0);
   const hole = new THREE.Path();
@@ -209,6 +211,7 @@ export function buildMuseum(ctx, x, z) {
   ctx.envMats.push(mat);
   const ring = new THREE.Mesh(geo, mat);
   ring.position.set(x, 78, z);
+  ring.rotation.y = face;
   ring.castShadow = ring.receiveShadow = true;
   ctx.scene.add(ring);
 

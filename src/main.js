@@ -1,5 +1,6 @@
 import * as THREE from 'three';
-import { createWorld, canDrive, surfaceH, TOD_ORDER, COAST_X } from './world.js';
+import { createWorld, canDrive, surfaceH, TOD_ORDER } from './world.js';
+import { loadGeo } from './geo.js';
 import { createCar } from './car.js';
 import { CHECKPOINTS, START } from './config.js';
 import { clamp, lerp, damp, smoothstep, angDiff } from './util.js';
@@ -22,7 +23,7 @@ renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 const scene = new THREE.Scene();
-const camera = new THREE.PerspectiveCamera(62, 1, 0.5, 12000);
+const camera = new THREE.PerspectiveCamera(62, 1, 1.5, 14000);
 scene.add(camera);
 
 // post: MSAA HDR target → bloom → vignette/grade → tone-map + sRGB
@@ -47,7 +48,7 @@ const keys = {};
 const V3 = THREE.Vector3;
 const S = { x: START.pos[0], z: START.pos[1], h: START.heading, v: 0, steer: 0, y: 0, pitch: 0, roll: 0 };
 let state = 'loading';
-let world, car, person;
+let world, car, person, geoData;
 const visited = new Set();
 const armed = Object.fromEntries(CHECKPOINTS.map((c) => [c.id, true]));
 let target = null;       // manually selected route target (cp id)
@@ -92,7 +93,7 @@ function chime(freqs = [660, 880, 1320]) {
 function updateAudio(throttle) {
   if (!audio) return;
   const { ctx, o1, o2, lp, eg, wg } = audio;
-  const f = clamp(Math.abs(S.v) / 70, 0, 1.2);
+  const f = clamp(Math.abs(S.v) / (GEAR_MAX[S.gear] * 0.95), 0, 1.3);
   const driving = state === 'driving' || state === 'parking';
   const now = ctx.currentTime;
   o1.frequency.setTargetAtTime(40 + f * 150 + throttle * 12, now, 0.08);
@@ -169,48 +170,53 @@ function renderPanel(cp) {
   $('#p-body').scrollTop = 0;
 }
 
-// ── minimap ──────────────────────────────────────────────────
-const MM = { x0: -1450, z0: -1280, s: 380 / 2600 };
+// ── minimap (follows the car; roads from the streamed OSM chunks) ──────────
+const MMR = 900;
 const mm = $('#mm'), mmc = mm.getContext('2d');
-let mmStatic = null;
+let mmBase = null;
 function buildMinimap() {
+  const { meta, land } = geoData, M = meta.mask;
   const c = document.createElement('canvas');
-  c.width = mm.width; c.height = mm.height;
+  c.width = M.w; c.height = M.h;
   const g = c.getContext('2d');
-  const P = (x, z) => [(x - MM.x0) * MM.s, (z - MM.z0) * MM.s];
-  g.fillStyle = '#10465d'; g.fillRect(0, 0, c.width, c.height);
-  g.fillStyle = '#d3bd92';
-  const [lx] = P(COAST_X, 0);
-  g.fillRect(lx, 0, c.width - lx, c.height);
-  g.lineCap = 'round'; g.strokeStyle = '#d3bd92';
-  for (const p of world.PLATES) {
-    const [ax, ay] = P(...p.a), [bx, by] = P(...p.b);
-    g.lineWidth = Math.max(2, p.r * 2 * MM.s);
-    g.beginPath(); g.moveTo(ax, ay); g.lineTo(bx, by); g.stroke();
+  const id = g.createImageData(M.w, M.h);
+  for (let i = 0; i < land.length; i++) {
+    const o = i * 4;
+    if (land[i]) { id.data[o] = 211; id.data[o + 1] = 189; id.data[o + 2] = 146; } else { id.data[o] = 16; id.data[o + 1] = 70; id.data[o + 2] = 93; }
+    id.data[o + 3] = 255;
   }
-  g.strokeStyle = '#6f7480';
-  for (const r of [...world.ROADS, ...world.PALM_ROADS]) {
-    const [ax, ay] = P(...r.a), [bx, by] = P(...r.b);
-    g.lineWidth = Math.max(1.2, r.w * MM.s * 0.9);
-    g.beginPath(); g.moveTo(ax, ay); g.lineTo(bx, by); g.stroke();
-  }
-  mmStatic = c;
+  g.putImageData(id, 0, 0);
+  mmBase = c;
 }
 function drawMinimap() {
-  if (!mmStatic) return;
-  mmc.drawImage(mmStatic, 0, 0);
-  const P = (x, z) => [(x - MM.x0) * MM.s, (z - MM.z0) * MM.s];
+  if (!mmBase) return;
+  const W = mm.width, H = mm.height, s = W / (2 * MMR), M = geoData.meta.mask;
+  mmc.fillStyle = '#10465d'; mmc.fillRect(0, 0, W, H);
+  const halfZ = MMR * (H / W);
+  mmc.imageSmoothingEnabled = true;
+  mmc.drawImage(mmBase, (S.x - MMR - M.x0) / M.res, (S.z - halfZ - M.z0) / M.res, (2 * MMR) / M.res, (2 * halfZ) / M.res, 0, 0, W, H);
+  const P = (x, z) => [(x - S.x) * s + W / 2, (z - S.z) * s + H / 2];
+  const roads = world.streamer.roadsNear(S.x, S.z, MMR + 300, 6);
+  mmc.lineCap = 'round'; mmc.lineJoin = 'round';
+  for (const [maxK, minK, col, wd] of [[6, 5, '#8a8f98', 1.2], [4, 3, '#707680', 2], [2, 0, '#f1ede4', 3.2]]) {
+    mmc.beginPath();
+    for (const r of roads) {
+      if (r.k > maxK || r.k < minK) continue;
+      for (let i = 0; i < r.p.length; i += 2) { const [x, y] = P(r.p[i], r.p[i + 1]); if (i === 0) mmc.moveTo(x, y); else mmc.lineTo(x, y); }
+    }
+    mmc.strokeStyle = col; mmc.lineWidth = wd; mmc.stroke();
+  }
   const tid = currentTarget()?.id;
   for (const cp of CHECKPOINTS) {
-    const [x, y] = P(...cp.stop);
-    mmc.beginPath(); mmc.arc(x, y, cp.id === tid ? 9 : 6.5, 0, 7);
-    mmc.fillStyle = cp.color; mmc.fill();
-    mmc.lineWidth = 2; mmc.strokeStyle = '#0b1220'; mmc.stroke();
-    if (cp.id === tid) { mmc.beginPath(); mmc.arc(x, y, 14 + Math.sin(performance.now() / 250) * 3, 0, 7); mmc.strokeStyle = cp.color; mmc.lineWidth = 2; mmc.stroke(); }
+    let [x, y] = P(...cp.stop);
+    const edge = x < 12 || x > W - 12 || y < 12 || y > H - 12;
+    if (edge) { const dx = x - W / 2, dy = y - H / 2, k = Math.min((W / 2 - 12) / Math.abs(dx || 1e-3), (H / 2 - 12) / Math.abs(dy || 1e-3)); x = W / 2 + dx * k; y = H / 2 + dy * k; }
+    mmc.beginPath(); mmc.arc(x, y, (cp.id === tid ? 10 : 7) * (edge ? 0.8 : 1), 0, 7);
+    mmc.fillStyle = cp.color; mmc.fill(); mmc.lineWidth = 2; mmc.strokeStyle = '#0b1220'; mmc.stroke();
+    if (cp.id === tid) { mmc.beginPath(); mmc.arc(x, y, 15 + Math.sin(performance.now() / 250) * 3, 0, 7); mmc.strokeStyle = cp.color; mmc.lineWidth = 2; mmc.stroke(); }
   }
-  const [cx, cy] = P(S.x, S.z);
-  mmc.save(); mmc.translate(cx, cy); mmc.rotate(Math.PI - S.h);
-  mmc.beginPath(); mmc.moveTo(0, -10); mmc.lineTo(7, 8); mmc.lineTo(0, 4); mmc.lineTo(-7, 8); mmc.closePath();
+  mmc.save(); mmc.translate(W / 2, H / 2); mmc.rotate(Math.PI - S.h);
+  mmc.beginPath(); mmc.moveTo(0, -11); mmc.lineTo(8, 9); mmc.lineTo(0, 5); mmc.lineTo(-8, 9); mmc.closePath();
   mmc.fillStyle = '#fff'; mmc.fill(); mmc.strokeStyle = '#0b1220'; mmc.lineWidth = 2; mmc.stroke();
   mmc.restore();
 }
@@ -280,7 +286,7 @@ function beginExit(cp) {
   exit.fd.set(exit.L.x - S.x, 0, exit.L.z - S.z).normalize();
   exit.D.set(S.x + l.x * 1.45, S.y, S.z + l.z * 1.45);
   exit.E.set(S.x + l.x * 4.2 + f.x * 7.5, 0, S.z + l.z * 4.2 + f.z * 7.5);
-  exit.E.y = surfaceH(exit.E.x, exit.E.z);
+  exit.E.y = surfaceH(exit.E.x, exit.E.z, S.y);
   exit.focus.set(exit.L.x + cp.focus[0], cp.focus[1], exit.L.z + cp.focus[2]);
   chime();
   document.body.classList.add('cine');
@@ -314,7 +320,14 @@ const KEYMAP = { KeyW: 'up', ArrowUp: 'up', KeyS: 'down', ArrowDown: 'down', Key
 window.addEventListener('keydown', (e) => {
   if (e.metaKey || e.ctrlKey || e.altKey) return;
   const k = KEYMAP[e.code];
-  if (k) { keys[k] = true; if (k === 'space' || e.code.startsWith('Arrow')) e.preventDefault(); }
+  if (k) {
+    if ((k === 'up' || k === 'down') && !e.repeat && (state === 'driving' || state === 'intro')) {
+      const now = performance.now();
+      if (now - lastTap[k] < 320) { shiftGear(k === 'up' ? 1 : -1); lastTap[k] = 0; } else lastTap[k] = now;
+    }
+    keys[k] = true;
+    if (k === 'space' || e.code.startsWith('Arrow')) e.preventDefault();
+  }
   if (state === 'loading') return;
   if (e.code === 'Escape' || ((k === 'up') && (state === 'info'))) startReturn();
   if (/^Digit[1-9]$/.test(e.code)) { const cp = CHECKPOINTS[+e.code.slice(5) - 1]; if (cp) teleportTo(cp); }
@@ -379,7 +392,19 @@ function startDriving() {
 // ── update ────────────────────────────────────────────────────
 // Vehicle model: analog steering with speed-sensitive lock, lateral-g limited yaw with
 // inertia, tyre grip (velocity relaxes toward heading; handbrake lets it slide).
-Object.assign(S, { steerCmd: 0, yaw: 0, vx: 0, vz: 0, acc: 0, lat: 0, camH: S.h });
+Object.assign(S, { steerCmd: 0, yaw: 0, vx: 0, vz: 0, acc: 0, lat: 0, camH: S.h, gear: 3 });
+const GEAR_MAX = [0, 22, 34, 48, 64, 82];   // top speed per gear (m/s)
+const GEAR_ACC = [0, 32, 27, 23, 20, 18];   // punch per gear
+let lastTap = { up: 0, down: 0 };
+function shiftGear(d) {
+  const g = clamp(S.gear + d, 1, 5);
+  if (g === S.gear) return;
+  S.gear = g;
+  const el = $('#gear');
+  el.textContent = `G${g}`;
+  el.classList.remove('shift'); void el.offsetWidth; el.classList.add('shift');
+  chime(d > 0 ? [440, 660] : [660, 440]);
+}
 const bumpNormal = (v, hit, rvx, rvz) => {
   const vn = v.vx * hit.x + v.vz * hit.z - (rvx * hit.x + rvz * hit.z);
   if (vn < 0) { v.vx -= vn * hit.x * 1.15; v.vz -= vn * hit.z * 1.15; return -vn; }
@@ -390,10 +415,11 @@ function driveUpdate(dt, allowInput = true) {
   const lf = allowInput && keys.left, rt = allowInput && keys.right;
   const brake = allowInput && keys.space, boost = allowInput && keys.shift;
   const speed = Math.abs(S.v);
-  const maxV = boost ? 66 : 46;
+  const maxV = GEAR_MAX[S.gear] * (boost ? 1.45 : 1);
+  const gAcc = GEAR_ACC[S.gear] * (boost ? 1.7 : 1);
   const prev = S.v;
   let a = 0;
-  if (up) a += (boost ? 34 : 22) * (1 - Math.pow(clamp(S.v / maxV, 0, 1), 1.6)) + 3;
+  if (up) a += gAcc * (1 - Math.pow(clamp(S.v / maxV, 0, 1), 1.6)) + 3;
   if (dn) a -= S.v > 1.5 ? 46 : 12;
   if (!up && !dn) a -= Math.sign(S.v) * (3.2 + S.v * S.v * 0.0014);
   if (brake) a -= Math.sign(S.v) * 60;
@@ -401,31 +427,31 @@ function driveUpdate(dt, allowInput = true) {
   if (!dn && prev > 0 && S.v < 0) S.v = 0;
   if (!up && prev < 0 && S.v > 0) S.v = 0;
   if (S.v > maxV) S.v = damp(S.v, maxV, 2, dt);
-  S.v = clamp(S.v, -11, 80);
+  S.v = clamp(S.v, -11, 130);
   S.acc = damp(S.acc, (S.v - prev) / Math.max(dt, 1e-3), 6, dt);
 
   // analog steering: ramps while held, self-centres on release
   const inp = (lf ? 1 : 0) - (rt ? 1 : 0);
   if (inp !== 0) {
-    const rate = inp * S.steerCmd < 0 ? 5 : 1.6;
+    const rate = inp * S.steerCmd < 0 ? 6.5 : 2.7;
     S.steerCmd = clamp(S.steerCmd + inp * rate * dt, -1, 1);
   } else {
-    const d = 3.0 * dt;
+    const d = 2.1 * dt;
     S.steerCmd = Math.abs(S.steerCmd) <= d ? 0 : S.steerCmd - Math.sign(S.steerCmd) * d;
   }
-  const maxS = 0.5 / (1 + speed * 0.07);
+  const maxS = 0.62 / (1 + speed * 0.045);
   S.steer = damp(S.steer, S.steerCmd * maxS, 12, dt);
   const sliding = brake && speed > 10;
   let yawT = (S.v / 3.0) * Math.tan(S.steer) * (sliding ? 1.35 : 1);
-  const lim = (sliding ? 13 : 8.5) / Math.max(speed, 4);
+  const lim = (sliding ? 18 : 12.5) / Math.max(speed, 4);
   yawT = clamp(yawT, -lim, lim);
-  S.yaw = damp(S.yaw, yawT, sliding ? 4 : 9, dt);
+  S.yaw = damp(S.yaw, yawT, sliding ? 3 : 6, dt);
   S.h += S.yaw * dt;
   S.lat = S.yaw * S.v;
 
   // grip: velocity follows heading
   const f = fwd(S.h);
-  const grip = sliding ? 2.2 : 10;
+  const grip = sliding ? 1.8 : 5.5;
   S.vx = damp(S.vx, f.x * S.v, grip, dt);
   S.vz = damp(S.vz, f.z * S.v, grip, dt);
 
@@ -441,14 +467,13 @@ function driveUpdate(dt, allowInput = true) {
     for (let it = 0; it < 2; it++) {
       const p = { x: S.x + f.x * off, z: S.z + f.z * off };
       const ox = p.x, oz = p.z;
-      const hit = world.colliders.resolve(p, 1.15);
+      const hit = world.resolve(p, 1.15, S.y);
       let tr = null;
-      if (!hit) tr = world.trafficResolve(p, 1.15);
+      if (!hit) tr = world.trafficResolve(p, 1.15, S.y);
       const h = hit || tr;
       if (!h) break;
       S.x += p.x - ox; S.z += p.z - oz;
-      const rvz = tr ? tr.car.dir * tr.car.v : 0;
-      impact = Math.max(impact, bumpNormal(S, h, 0, rvz));
+      impact = Math.max(impact, bumpNormal(S, h, tr ? tr.car.vx : 0, tr ? tr.car.vz : 0));
     }
   }
   if (impact > 0) {
@@ -461,7 +486,7 @@ function driveUpdate(dt, allowInput = true) {
 
 function poseCar(dt) {
   const f = fwd(S.h);
-  const yf = surfaceH(S.x + f.x * 2.2, S.z + f.z * 2.2), yb = surfaceH(S.x - f.x * 2.2, S.z - f.z * 2.2);
+  const yf = surfaceH(S.x + f.x * 2.2, S.z + f.z * 2.2, S.y), yb = surfaceH(S.x - f.x * 2.2, S.z - f.z * 2.2, S.y);
   S.y = damp(S.y, (yf + yb) / 2, 14, dt);
   S.pitch = damp(S.pitch, Math.atan2(yf - yb, 4.4) + S.acc * 0.0032, 8, dt);
   S.roll = damp(S.roll, S.lat * 0.0042, 6, dt);
@@ -483,7 +508,7 @@ function cameraDriving(dt, t) {
   const f = fwd(S.camH);
   const look = new V3(S.x + f.x * (6 + sp * 0.1), S.y + 1.4, S.z + f.z * (6 + sp * 0.1));
   camLook.x = damp(camLook.x, look.x, 9, dt); camLook.y = damp(camLook.y, look.y, 9, dt); camLook.z = damp(camLook.z, look.z, 9, dt);
-  const ground = surfaceH(camPos.x, camPos.z) + 1.4;
+  const ground = surfaceH(camPos.x, camPos.z, S.y) + 1.4;
   const cp = camPos.clone();
   if (cp.y < ground) cp.y = ground;
   if (shake > 0.001) { cp.x += (Math.random() - 0.5) * shake * 0.5; cp.y += (Math.random() - 0.5) * shake * 0.4; shake *= Math.exp(-6 * dt); }
@@ -729,11 +754,21 @@ window.addEventListener('resize', resize);
 // ── boot ──────────────────────────────────────────────────────
 (async function boot() {
   resize();
-  setBar(8);
-  await nextFrame(); await nextFrame();
-  world = createWorld(scene, renderer);
-  setBar(70);
+  setBar(5);
   await nextFrame();
+  geoData = await loadGeo();
+  setBar(30);
+  // real-world positions from the OSM build
+  const L = geoData.meta.landmarks;
+  for (const cp of CHECKPOINTS) { const l = L[cp.id]; if (l) { cp.land = [l.x, l.z]; cp.stop = l.stop; } }
+  const st = geoData.meta.start;
+  const bk = L.projects;
+  S.x = st.x; S.z = st.z; S.h = Math.atan2(bk.x - st.x, bk.z - st.z); S.camH = S.h;
+  await nextFrame(); await nextFrame();
+  world = createWorld(scene, renderer, geoData, CHECKPOINTS);
+  setBar(55);
+  await world.streamer.preload(S.x, S.z, 1);
+  setBar(85);
   car = createCar('#4cc9f0');
   person = car.person;
   scene.add(car.group);
@@ -749,6 +784,5 @@ window.addEventListener('resize', resize);
   btn.style.display = 'block';
   btn.addEventListener('click', go);
   document.body.classList.add('cine');
-  // expose for debugging / screenshots
-  window.__dubai = { S, go, teleportTo, cps: CHECKPOINTS, get state() { return state; }, world, camera };
+  window.__dubai = { S, go, teleportTo, cps: CHECKPOINTS, get state() { return state; }, world, camera, renderer, geo: geoData };
 })();
