@@ -3,6 +3,11 @@ import { createWorld, canDrive, surfaceH, TOD_ORDER, COAST_X } from './world.js'
 import { createCar } from './car.js';
 import { CHECKPOINTS, START } from './config.js';
 import { clamp, lerp, damp, smoothstep, angDiff } from './util.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -19,6 +24,24 @@ renderer.toneMapping = THREE.ACESFilmicToneMapping;
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(62, 1, 0.5, 12000);
 scene.add(camera);
+
+// post: MSAA HDR target → bloom → vignette/grade → tone-map + sRGB
+const composer = new EffectComposer(renderer, new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: 4 }));
+composer.addPass(new RenderPass(scene, camera));
+const bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.3, 0.75, 0.95);
+composer.addPass(bloom);
+composer.addPass(new ShaderPass({
+  uniforms: { tDiffuse: { value: null }, amount: { value: 0.38 } },
+  vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }',
+  fragmentShader: `uniform sampler2D tDiffuse; uniform float amount; varying vec2 vUv;
+    void main(){ vec4 c = texture2D(tDiffuse, vUv); vec2 d = vUv - 0.5;
+      float v = smoothstep(0.95, 0.25, length(d) * 1.25);
+      c.rgb *= mix(1.0 - amount, 1.0, v);
+      float l = dot(c.rgb, vec3(0.2126, 0.7152, 0.0722));
+      c.rgb = mix(vec3(l), c.rgb, 1.1);
+      gl_FragColor = c; }`,
+}));
+composer.addPass(new OutputPass());
 
 const keys = {};
 const V3 = THREE.Vector3;
@@ -644,13 +667,17 @@ function tick() {
   $('#kmh').textContent = String(Math.round(Math.abs(S.v) * 3.6));
   drawMinimap();
   updatePins();
-  renderer.render(scene, camera);
+  if (window.__camOverride) { const o = window.__camOverride; camera.clearViewOffset(); camera.position.set(...o.pos); camera.lookAt(...o.look); camera.fov = o.fov || 55; camera.updateProjectionMatrix(); }
+  bloom.strength = 0.26 + world.night * 0.55;
+  composer.render();
   requestAnimationFrame(tick);
 }
 
 function resize() {
   const w = innerWidth, h = innerHeight;
   renderer.setSize(w, h, false);
+  composer.setPixelRatio(renderer.getPixelRatio());
+  composer.setSize(w, h);
   camera.aspect = w / h;
   camera.updateProjectionMatrix();
 }

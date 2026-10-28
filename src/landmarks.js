@@ -46,12 +46,12 @@ export function buildBurjKhalifa(ctx, x, z) {
 export function buildBurjAlArab(ctx, x, z) {
   const g = new THREE.Group();
   g.position.set(x, 0, z);
-  g.rotation.y = 0.4; // sail bulges north, seen in profile from the causeway
+  g.rotation.y = -Math.PI / 2 + 0.45; // sail faces the causeway, turned ~25° for a 3/4 view
   const H = 321;
 
   // sail
   const nu = 30, nv = 48, W0 = 64;
-  const pos = [], idx = [];
+  const pos = [], idx = [], uvs = [];
   for (let j = 0; j <= nv; j++) {
     const v = j / nv;
     const W = W0 * (1 - 0.82 * Math.pow(v, 2.6));
@@ -59,6 +59,7 @@ export function buildBurjAlArab(ctx, x, z) {
     for (let i = 0; i <= nu; i++) {
       const u = (i / nu) * 2 - 1;
       pos.push(u * W / 2, 8 + v * (H - 22), 8 - bulge * (1 - u * u));
+      uvs.push(i / nu, v * (H - 22) / 11);
     }
   }
   for (let j = 0; j < nv; j++)
@@ -68,17 +69,25 @@ export function buildBurjAlArab(ctx, x, z) {
     }
   const sg = new THREE.BufferGeometry();
   sg.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  sg.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
   sg.setIndex(idx);
   sg.computeVertexNormals();
+  const bands = makeLabelTexture((c, w, h) => {
+    c.fillStyle = '#eef1f3'; c.fillRect(0, 0, w, h);
+    c.fillStyle = '#b9c3cc'; c.fillRect(0, h - 6, w, 6);
+    c.fillStyle = 'rgba(120,140,160,0.35)'; c.fillRect(0, 0, w, 3);
+    c.fillStyle = 'rgba(255,255,255,0.0)';
+  }, 8, 64);
+  bands.wrapS = bands.wrapT = THREE.RepeatWrapping;
   const sailMat = new THREE.MeshStandardMaterial({
-    color: 0xf7f4ee, roughness: 0.55, metalness: 0.05, side: THREE.DoubleSide,
+    map: bands, color: 0xffffff, roughness: 0.6, metalness: 0.0, side: THREE.DoubleSide,
     emissive: 0x2060ff, emissiveIntensity: 0,
   });
   const sail = new THREE.Mesh(sg, sailMat);
   sail.castShadow = sail.receiveShadow = true;
   g.add(sail);
 
-  const steel = new THREE.MeshStandardMaterial({ color: 0xdfe6ec, roughness: 0.3, metalness: 0.8 });
+  const steel = new THREE.MeshStandardMaterial({ color: 0x8e99a4, roughness: 0.35, metalness: 0.8 });
   const add = (geo, mat, px, py, pz, rz = 0) => {
     const m = new THREE.Mesh(geo, mat);
     m.position.set(px, py, pz);

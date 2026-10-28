@@ -38,35 +38,53 @@ export function makeWindowTextures(kind) {
   };
   const mapC = mk(), litC = mk();
   const m = mapC.getContext('2d'), l = litC.getContext('2d');
-  const R = mulberry32(kind === 'glass' ? 11 : 23);
-  const glass = kind === 'glass';
-  m.fillStyle = glass ? '#3f5166' : '#d9c4a0';
-  m.fillRect(0, 0, mapC.width, mapC.height);
+  const R = mulberry32(kind === 'glass' ? 11 : kind === 'ribbon' ? 17 : 23);
   l.fillStyle = '#000';
   l.fillRect(0, 0, litC.width, litC.height);
-  const glassCols = ['#8fb8de', '#9cc4e6', '#7aa6d1', '#a9cfee', '#86b0d8'];
-  const stoneCols = ['#47576a', '#3d4b5c', '#566878', '#4a5a6c'];
-  for (let r = 0; r < rows; r++) {
-    for (let c = 0; c < cols; c++) {
+  const lit = (x, y, w, h) => {
+    l.fillStyle = R() < 0.6 ? '#ffcf86' : R() < 0.5 ? '#fff1d0' : '#bcdcff';
+    l.globalAlpha = 0.35 + R() * 0.5;
+    l.fillRect(x, y, w, h);
+    l.globalAlpha = 1;
+  };
+  if (kind === 'glass') { // curtain wall: dark reflective panes, light aluminium mullions
+    m.fillStyle = '#aab4bf';
+    m.fillRect(0, 0, mapC.width, mapC.height);
+    for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
       const x = c * S, y = r * S;
-      const inset = glass ? 3 : 8;
-      const w = S - inset * 2, h = glass ? S - 6 : S - 14;
-      const oy = glass ? 3 : 7;
-      m.fillStyle = (glass ? glassCols : stoneCols)[Math.floor(R() * 4.99)];
-      m.fillRect(x + inset, y + oy, w, h);
-      if (glass) { // sky-ish gradient highlight
-        const g = m.createLinearGradient(0, y, 0, y + S);
-        g.addColorStop(0, 'rgba(255,255,255,0.22)');
-        g.addColorStop(1, 'rgba(0,0,0,0.12)');
-        m.fillStyle = g;
-        m.fillRect(x + inset, y + oy, w, h);
-      }
-      if (R() < 0.4) {
-        l.fillStyle = R() < 0.72 ? '#ffd48a' : '#c7e4ff';
-        l.globalAlpha = 0.65 + R() * 0.35;
-        l.fillRect(x + inset, y + oy, w, h);
-        l.globalAlpha = 1;
-      }
+      const g = m.createLinearGradient(x, y, x + S, y + S);
+      const t = R();
+      g.addColorStop(0, `rgb(${20 + t * 14},${46 + t * 22},${72 + t * 26})`);
+      g.addColorStop(1, `rgb(${10 + t * 8},${28 + t * 14},${48 + t * 18})`);
+      m.fillStyle = g;
+      m.fillRect(x + 2, y + 2, S - 3, S - 3);
+      if (R() < 0.26) lit(x + 2, y + 2, S - 3, S - 3);
+    }
+  } else if (kind === 'ribbon') { // horizontal ribbon windows with spandrel bands
+    m.fillStyle = '#d4d6d8';
+    m.fillRect(0, 0, mapC.width, mapC.height);
+    for (let r = 0; r < rows; r++) {
+      const y = r * S;
+      const g = m.createLinearGradient(0, y, 0, y + S);
+      g.addColorStop(0, '#2f5f7d'); g.addColorStop(1, '#14303f');
+      m.fillStyle = g;
+      m.fillRect(0, y + 8, mapC.width, S - 8);
+      m.fillStyle = 'rgba(210,225,235,0.35)';
+      for (let c = 0; c < cols; c++) m.fillRect(c * S, y + 8, 1.5, S - 8);
+      for (let c = 0; c < cols; c++) if (R() < 0.3) lit(c * S + 1, y + 9, S - 2, S - 10);
+    }
+  } else { // residential stone with recessed windows and balcony lines
+    m.fillStyle = '#e1cfaf';
+    m.fillRect(0, 0, mapC.width, mapC.height);
+    for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+      const x = c * S, y = r * S;
+      m.fillStyle = '#c9b48f';
+      m.fillRect(x, y + S - 5, S, 5);               // balcony slab
+      m.fillStyle = R() < 0.5 ? '#3d4b5c' : '#566878';
+      m.fillRect(x + 7, y + 6, S - 14, S - 14);
+      m.fillStyle = 'rgba(0,0,0,0.25)';
+      m.fillRect(x + 7, y + 6, S - 14, 3);
+      if (R() < 0.3) lit(x + 7, y + 6, S - 14, S - 14);
     }
   }
   const tex = (c) => {
@@ -79,24 +97,53 @@ export function makeWindowTextures(kind) {
   return { map: tex(mapC), lit: tex(litC) };
 }
 
+// Tileable noisy ground texture (sand, concrete…).
+export function makeGroundTexture(base, vary, seed = 3, size = 256, streaks = false) {
+  const c = document.createElement('canvas');
+  c.width = c.height = size;
+  const g = c.getContext('2d');
+  const R = mulberry32(seed);
+  g.fillStyle = base; g.fillRect(0, 0, size, size);
+  for (let i = 0; i < size * size * 0.35; i++) {
+    const v = (R() - 0.5) * vary;
+    g.fillStyle = v > 0 ? `rgba(255,255,255,${v})` : `rgba(0,0,0,${-v})`;
+    g.fillRect(R() * size, R() * size, 1 + R() * 2, 1 + R() * 2);
+  }
+  if (streaks) { // wind ripples
+    for (let i = 0; i < 40; i++) {
+      g.strokeStyle = `rgba(0,0,0,${0.03 + R() * 0.05})`; g.lineWidth = 1 + R() * 2;
+      const y = R() * size, a = R() * 6;
+      g.beginPath();
+      for (let x = 0; x <= size; x += 8) g.lineTo(x, y + Math.sin(x * 0.05 + a) * 4);
+      g.stroke();
+    }
+  }
+  const t = new THREE.CanvasTexture(c);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.anisotropy = 8;
+  return t;
+}
+
 export function makeRoadTexture(kind) {
-  const W = kind === 'r2' ? 128 : kind === 'r4' ? 256 : 512;
-  const H = 256;
+  const W = kind === 'r2' ? 256 : kind === 'r4' ? 512 : 1024;
+  const H = 512;
   const c = document.createElement('canvas');
   c.width = W; c.height = H;
   const g = c.getContext('2d');
   g.fillStyle = '#2c2e33';
   g.fillRect(0, 0, W, H);
   const R = mulberry32(5);
-  for (let i = 0; i < 900; i++) {
-    const v = 36 + Math.floor(R() * 26);
+  for (let i = 0; i < 9000; i++) {
+    const v = 34 + Math.floor(R() * 30);
     g.fillStyle = `rgb(${v},${v + 1},${v + 4})`;
     g.fillRect(R() * W, R() * H, 2, 2);
   }
   const line = (x, w, col, dash) => {
+    w *= 1.6;
     g.fillStyle = col;
     if (!dash) { g.fillRect(x - w / 2, 0, w, H); return; }
-    for (let y = 0; y < H; y += 128) g.fillRect(x - w / 2, y, w, 64);
+    for (let y = 0; y < H; y += 256) g.fillRect(x - w / 2, y, w, 128);
   };
   const edge = W * 0.03;
   if (kind === 'r2') {
